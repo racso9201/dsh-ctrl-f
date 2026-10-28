@@ -42,7 +42,7 @@ dsh plugin --profile desktop remove dsh-ctrl-f
 
 | Key | Action |
 | --- | --- |
-| `Ctrl+F` | Open the find bar (again: select the query) |
+| `Ctrl+F` (macOS: `Cmd+F`) | Open the find bar (again: select the query) |
 | `Enter` / `↓` | Next match |
 | `Shift+Enter` / `↑` | Previous match |
 | `F3` / `Shift+F3` | Next / previous match |
@@ -64,6 +64,21 @@ The client half registers a component into the `shell.overlay` slot and a captur
 - DeepSeek Harness with the Web client (`platform: web`).
 - A Chromium-based browser or the desktop shell (Electron) for the CSS Custom Highlight API. Where it is unavailable, matching and jumping still work — only the highlight colors are missing.
 
+## Platforms
+
+There is no Windows-only code: the bundle is plain client-side JavaScript. It touches the DOM, `keydown` and the CSS Custom Highlight API — no native modules, no Node APIs, no `process.platform` branches — so the same package runs anywhere the DSH Web client runs.
+
+| Platform | Shortcut | Notes |
+| --- | --- | --- |
+| Windows | `Ctrl+F` | desktop shell or any Chromium-based browser |
+| macOS | `Cmd+F` | the handler accepts both `metaKey` and `ctrlKey`; the hint text switches to `Cmd+F` |
+| Linux | `Ctrl+F` | same as Windows |
+
+Two macOS caveats worth knowing:
+
+- If a future DSH build binds `Cmd+F` as a native application-menu accelerator, the menu wins over renderer key handling. `F3` / `Shift+F3` still work as a fallback.
+- Safari before 17.2 has no Custom Highlight API: matches still jump, but nothing is painted.
+
 ## Limitations
 
 - Only materialized (rendered) rows can be searched; scroll to load older history first.
@@ -83,3 +98,8 @@ node --check index.js
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+## Changelog
+
+- **1.1.0** — platform-aware hint (`Cmd+F` on macOS, `Ctrl+F` elsewhere); documented Windows/macOS/Linux support.
+- **1.0.0** — first release: Ctrl+F find bar over assistant answers only.

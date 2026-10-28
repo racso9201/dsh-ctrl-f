@@ -300,6 +300,19 @@ window.__ModuleLoader__.load({
       borderRadius: '5px',
     };
 
+    const IS_MAC = (() => {
+      try {
+        const data = navigator.userAgentData;
+        if (data && typeof data.platform === 'string') return data.platform === 'macOS';
+      } catch (error) {
+        // userAgentData is Chromium-only; fall through to platform sniffing.
+      }
+      return /Mac|iPhone|iPad|iPod/.test((navigator && navigator.platform) || '');
+    })();
+    // macOS users press Cmd+F, everyone else Ctrl+F; the handler accepts both,
+    // only the hint text changes.
+    const SHORTCUT_LABEL = IS_MAC ? 'Cmd+F' : 'Ctrl+F';
+
     const BAR_STYLE = {
       position: 'fixed',
       top: '64px',
@@ -335,9 +348,8 @@ window.__ModuleLoader__.load({
         ? (state.count ? `${state.index + 1}/${state.count}` : '0/0')
         : '';
 
-      const scopeNote = state.includeProcess
-        ? '範圍：回覆 + 過程'
-        : '範圍：只搜回覆（不含思考與工具輸出）';
+      const scopeNote = `${SHORTCUT_LABEL} · 範圍：`
+        + (state.includeProcess ? '回覆 + 過程' : '只搜回覆（不含思考與工具輸出）');
       const rowNote = `已掃描 ${state.answerRows} 段 / 共 ${state.scannedRows} 列`;
 
       return h(
