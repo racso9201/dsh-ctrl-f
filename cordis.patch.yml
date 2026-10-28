@@ -1,0 +1,4 @@
+# Ctrl+F find-in-conversation bundle for a DSH profile.
+- insert:
+    - id: dsh-ctrl-f
+      name: "dsh-ctrl-f"

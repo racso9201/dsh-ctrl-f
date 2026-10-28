@@ -1,0 +1,48 @@
+{
+  "name": "dsh-ctrl-f",
+  "version": "1.0.0",
+  "description": "Ctrl+F find-in-conversation for the DeepSeek Harness Web client: searches assistant answers only, skipping the model's reasoning and tool output.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "find",
+    "ctrl-f"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "meta.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/racso9201/dsh-ctrl-f.git"
+  },
+  "homepage": "https://github.com/racso9201/dsh-ctrl-f#readme",
+  "bugs": {
+    "url": "https://github.com/racso9201/dsh-ctrl-f/issues"
+  },
+  "license": "MIT"
+}
