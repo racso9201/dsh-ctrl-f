@@ -7,7 +7,11 @@ window.__ModuleLoader__.load({
     const HL_ALL = 'dsh-find-all';
     const HL_CURRENT = 'dsh-find-current';
     const MAX_MATCHES = 400;
+    const MAX_PAGES = 240;
+    const LOAD_BUDGET_MS = 90000;
     const RESCAN_DELAY = 220;
+    // Some builds append a count to the label ("載入更早 (20)"); match the prefix.
+    const LOAD_EARLIER_TEXT = /^(load earlier|加载更早|載入更早)/i;
 
     /**
      * Transcript row kinds. `assistant-step` rows carry the prose the user reads;
@@ -29,6 +33,9 @@ window.__ModuleLoader__.load({
       includeProcess: false,
       answerRows: 0,
       scannedRows: 0,
+      loading: false,
+      pages: 0,
+      loadError: '',
     };
     const listeners = new Set();
     function emit() {
@@ -50,6 +57,7 @@ window.__ModuleLoader__.load({
     let rescanTimer = null;
     let observer = null;
     let attached = false;
+    let loadToken = 0;
 
     function ensureStyle() {
       if (styleTag && styleTag.isConnected) return;
@@ -69,6 +77,114 @@ window.__ModuleLoader__.load({
         document.querySelector('[data-conversation-scroll]') ||
         document.body
       );
+    }
+
+    function scrollerEl() {
+      return (
+        document.querySelector('[data-conversation-scroll]') ||
+        document.querySelector('[data-conversation-content]')
+      );
+    }
+
+    /**
+     * The chat view renders its own "load earlier" pager at the top of the
+     * transcript. Its label is localized ("Load earlier" / "加载更早" /
+     * "載入更早"), sometimes with a count suffix, so match the prefix.
+     */
+    function findLoadEarlier() {
+      const scopes = [scrollerEl(), document].filter(Boolean);
+      for (const scope of scopes) {
+        const buttons = scope.querySelectorAll('button');
+        for (const button of buttons) {
+          if (button.closest('[data-dsh-find-ui]')) continue;
+          const label = (button.textContent || '').trim();
+          if (!label || label.length > 60) continue;
+          if (LOAD_EARLIER_TEXT.test(label)) return button;
+        }
+      }
+      return null;
+    }
+
+    function transcriptSignature() {
+      const scroller = scrollerEl();
+      return `${document.querySelectorAll('[data-chat-flow-kind]').length}:${
+        scroller ? scroller.scrollHeight : 0
+      }`;
+    }
+
+    function wait(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Resolves once rows stop being appended, so the next click happens after
+     * the chat view has actually rendered the page it just fetched.
+     */
+    async function waitForQuiet(quiet = 160, cap = 8000) {
+      const started = Date.now();
+      let signature = transcriptSignature();
+      let changedAt = Date.now();
+      while (Date.now() - started < cap) {
+        await wait(50);
+        const next = transcriptSignature();
+        if (next !== signature) {
+          signature = next;
+          changedAt = Date.now();
+          continue;
+        }
+        if (Date.now() - changedAt >= quiet) return true;
+      }
+      return false;
+    }
+
+    /**
+     * Press the pager until it disappears so the whole transcript is mounted
+     * before the first search runs. Cheap no-op once everything is loaded.
+     */
+    async function loadAllEarlier() {
+      if (state.loading) return;
+      const token = (loadToken += 1);
+      const startedAt = Date.now();
+      state.loading = true;
+      state.pages = 0;
+      state.loadError = '';
+      emit();
+      try {
+        if (!findLoadEarlier()) {
+          // Nothing to page: still settle briefly, rows may be mid-render.
+          if (state.open) await waitForQuiet(120, 1500);
+          return;
+        }
+        for (let page = 0; page < MAX_PAGES; page += 1) {
+          if (token !== loadToken || !state.open) return;
+          if (Date.now() - startedAt > LOAD_BUDGET_MS) {
+            state.loadError = '載入逾時，已停止';
+            return;
+          }
+          const button = findLoadEarlier();
+          if (!button) return;
+          if (button.disabled) {
+            const before = transcriptSignature();
+            await waitForQuiet(200, 3000);
+            if (transcriptSignature() === before) {
+              state.loadError = '「載入更早」一直停用';
+              return;
+            }
+            continue;
+          }
+          state.pages += 1;
+          emit();
+          button.click();
+          await waitForQuiet();
+        }
+        state.loadError = `已載入 ${MAX_PAGES} 頁仍未到底`;
+      } finally {
+        if (token === loadToken) {
+          state.loading = false;
+          emit();
+          if (state.open) rescan();
+        }
+      }
     }
 
     function rowInfo(element) {
@@ -221,10 +337,17 @@ window.__ModuleLoader__.load({
       ensureStyle();
       rescan();
       attach();
+      // One full load per open: page everything in, then the existing rescan
+      // (MutationObserver + explicit rescan in loadAllEarlier) covers it all.
+      loadAllEarlier();
     }
 
     function closeBar() {
       state.open = false;
+      loadToken += 1;
+      state.loading = false;
+      state.pages = 0;
+      state.loadError = '';
       ranges = [];
       state.count = 0;
       state.index = 0;
@@ -313,6 +436,55 @@ window.__ModuleLoader__.load({
     // only the hint text changes.
     const SHORTCUT_LABEL = IS_MAC ? 'Cmd+F' : 'Ctrl+F';
 
+    /** Follow the app's own language: <html lang>, then the browser locale. */
+    function detectLang() {
+      const tag = String(
+        (document.documentElement && document.documentElement.lang) ||
+        (typeof navigator !== 'undefined' && navigator.language) ||
+        '',
+      ).toLowerCase();
+      return tag.startsWith('en') ? 'en' : 'zh';
+    }
+    const LANG = detectLang();
+
+    const TEXT = LANG === 'en'
+      ? {
+          placeholder: 'Search answers only',
+          inputLabel: 'Search the assistant answers',
+          loadingPages: (pages) => `Loading ${pages} page${pages === 1 ? '' : 's'}…`,
+          scopePrefix: 'scope: ',
+          scopeProcess: 'answers + process',
+          scopeAnswers: 'answers only (no reasoning or tool output)',
+          loadingNote: (pages) => `loading the whole transcript (${pages} pages so far)`,
+          scanNote: (answers, rows) => `scanned ${answers} answers of ${rows} rows`,
+          errDisabled: '"Load earlier" stayed disabled',
+          errTimeout: 'load timed out',
+          errPageCap: (pages) => `stopped after ${pages} pages`,
+          prevTitle: 'Previous (Shift+Enter / ↑)',
+          nextTitle: 'Next (Enter / ↓)',
+          closeTitle: 'Close (Esc)',
+          includeTitle: 'Also search reasoning, tool output and your own messages',
+          includeLabel: 'Agent reasoning',
+        }
+      : {
+          placeholder: '只在回覆中尋找',
+          inputLabel: '在回覆結果中尋找',
+          loadingPages: (pages) => `載入 ${pages} 頁…`,
+          scopePrefix: '範圍：',
+          scopeProcess: '回覆 + 過程',
+          scopeAnswers: '只搜回覆（不含思考與工具輸出）',
+          loadingNote: (pages) => `正在載入整段對話（已載入 ${pages} 頁）`,
+          scanNote: (answers, rows) => `已掃描 ${answers} 段 / 共 ${rows} 列`,
+          errDisabled: '「載入更早」一直停用',
+          errTimeout: '載入逾時，已停止',
+          errPageCap: (pages) => `已載入 ${pages} 頁仍未到底`,
+          prevTitle: '上一個 (Shift+Enter / ↑)',
+          nextTitle: '下一個 (Enter / ↓)',
+          closeTitle: '關閉 (Esc)',
+          includeTitle: '把思考過程、工具輸出與使用者訊息也納入搜尋',
+          includeLabel: '含agent 思考過程',
+        };
+
     const BAR_STYLE = {
       position: 'fixed',
       top: '64px',
@@ -344,19 +516,24 @@ window.__ModuleLoader__.load({
 
       if (!state.open) return null;
 
-      const label = state.query
-        ? (state.count ? `${state.index + 1}/${state.count}` : '0/0')
-        : '';
+      const label = state.loading
+        ? TEXT.loadingPages(state.pages)
+        : state.query
+          ? (state.count ? `${state.index + 1}/${state.count}` : '0/0')
+          : '';
 
-      const scopeNote = `${SHORTCUT_LABEL} · 範圍：`
-        + (state.includeProcess ? '回覆 + 過程' : '只搜回覆（不含思考與工具輸出）');
-      const rowNote = `已掃描 ${state.answerRows} 段 / 共 ${state.scannedRows} 列`;
+      const scopeNote = `${SHORTCUT_LABEL} · ${TEXT.scopePrefix}`
+        + (state.includeProcess ? TEXT.scopeProcess : TEXT.scopeAnswers);
+      const rowNote = state.loading
+        ? TEXT.loadingNote(state.pages)
+        : TEXT.scanNote(state.answerRows, state.scannedRows);
+      const loadNote = state.loadError ? ` · ${state.loadError}` : '';
 
       return h(
         'div',
         {
           'data-dsh-find-ui': '',
-          title: `${scopeNote} · ${rowNote}`,
+          title: `${scopeNote} · ${rowNote}${loadNote}`,
           style: BAR_STYLE,
           onMouseDown: (event) => event.stopPropagation(),
         },
@@ -365,8 +542,8 @@ window.__ModuleLoader__.load({
           type: 'text',
           value: state.query,
           spellCheck: false,
-          placeholder: '只在回覆中尋找',
-          'aria-label': '在回覆結果中尋找',
+          placeholder: TEXT.placeholder,
+          'aria-label': TEXT.inputLabel,
           style: INPUT_STYLE,
           onChange: (event) => setQuery(event.target.value),
           onKeyDown: (event) => {
@@ -391,7 +568,7 @@ window.__ModuleLoader__.load({
           'span',
           {
             style: {
-              minWidth: '46px',
+              minWidth: state.loading ? '78px' : '46px',
               textAlign: 'center',
               color: 'var(--dsw-alias-label-tertiary, inherit)',
               fontVariantNumeric: 'tabular-nums',
@@ -401,20 +578,20 @@ window.__ModuleLoader__.load({
         ),
         h('button', {
           type: 'button',
-          title: '上一個 (Shift+Enter)',
+          title: TEXT.prevTitle,
           style: BUTTON_STYLE,
           onClick: () => step(-1),
         }, '↑'),
         h('button', {
           type: 'button',
-          title: '下一個 (Enter)',
+          title: TEXT.nextTitle,
           style: BUTTON_STYLE,
           onClick: () => step(1),
         }, '↓'),
         h(
           'label',
           {
-            title: '把思考過程、工具輸出與使用者訊息也納入搜尋',
+            title: TEXT.includeTitle,
             style: {
               display: 'inline-flex',
               alignItems: 'center',
@@ -430,7 +607,7 @@ window.__ModuleLoader__.load({
             onChange: (event) => setIncludeProcess(event.target.checked),
             style: { margin: 0, cursor: 'pointer' },
           }),
-          '含過程',
+          TEXT.includeLabel,
         ),
         h('button', {
           type: 'button',
@@ -460,6 +637,18 @@ window.__ModuleLoader__.load({
           event.stopPropagation();
           if (state.open) step(event.shiftKey ? -1 : 1);
           else openBar();
+          return;
+        }
+        if (state.open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+          if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+          // Steal the arrows while the bar is open so they step through matches
+          // instead of scrolling the transcript. With no matches there is
+          // nothing to step to, so leave normal scrolling alone.
+          if (state.count > 0) {
+            event.preventDefault();
+            event.stopPropagation();
+            step(event.key === 'ArrowDown' ? 1 : -1);
+          }
           return;
         }
         if (event.key === 'Escape' && state.open) {

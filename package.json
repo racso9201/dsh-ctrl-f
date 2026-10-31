@@ -1,7 +1,7 @@
 {
   "name": "dsh-ctrl-f",
-  "version": "1.1.0",
-  "description": "Ctrl+F find-in-conversation for the DeepSeek Harness Web client: searches assistant answers only, skipping the model's reasoning and tool output.",
+  "version": "1.2.1",
+  "description": "Ctrl+F find-in-conversation for the DeepSeek Harness Web client: pages the whole transcript in on first open, then searches assistant answers only, skipping the model's reasoning and tool output.",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -22,6 +22,7 @@
     "meta.json",
     "icon.svg",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "dsh": {
